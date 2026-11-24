@@ -19,6 +19,67 @@
 
 ## 2. Architecture
 
+### System Architecture Diagram (Mermaid)
+
+```mermaid
+flowchart TD
+    subgraph Ingestion["1. Inbound Triggers & Validation"]
+        WH["POST /webhook/support-email (HMAC Secret)"] --> VAL["Validate Payload & Email-ID Idempotency"]
+        BATCH["Batch Runner (25 Test Emails + Rate-Limit Guard)"] --> VAL
+        VAL --> MED{"Sensitive Health / Medical Query?"}
+    end
+
+    subgraph Classification["2. Structured Classification & Safety Cross-Check"]
+        MED -- "Yes (Skip External LLM)" --> MED_ESC["Deterministic Cosmetics Disclaimer + needs_human=true"]
+        MED -- "No" --> CLS["LLM Classify (temp=0 + Backoff + 1-Turn JSON Auto-Repair)"]
+        CLS --> XCHK["Cross-Check vs Deterministic Baseline + Schema Gate"]
+        XCHK --> CONF{"Confidence >= 0.75 & No Disagreement?"}
+    end
+
+    subgraph PolicyEngine["3. Ownership & Deterministic Policy Engine (Scenario Date: 2026-11-20)"]
+        CONF -- "No" --> LOW_CONF["Escalate to Human (Open Ticket if Return/Complaint)"]
+        CONF -- "Yes" --> ROUTE{"Route by Primary Intent"}
+
+        ROUTE -- "other" --> LOG_ONLY["Log Only (Spam / Collab / GST Invoice / Thanks)"]
+        ROUTE -- "product_query" --> FAQ_CHK["Search Approved FAQ (data/faq.md)"]
+        FAQ_CHK -- "Uncovered Topic" --> UNCOV["Escalate: needs_human=true"]
+        FAQ_CHK -- "Grounded Evidence" --> AGENT
+
+        ROUTE -- "order_status / return_refund / complaint" --> OWN["Resolve Order (KC-#### or Unique Email) & Verify Sender == Checkout Email"]
+        OWN -- "Mismatch or Not Found" --> PRIV_BLK["Withhold Order PII + needs_human=true (+ Ticket if Return/Complaint)"]
+        OWN -- "Verified Owner" --> INTENT_SUB{"Order Intent Type"}
+
+        INTENT_SUB -- "order_status" --> ETA_CHK["Check Status, Cancelled Refund, COD Total & ETA"]
+        ETA_CHK --> AGENT
+
+        INTENT_SUB -- "return_refund / complaint" --> ELIG["Compute Days Since Delivery, 7d/Unopened/Kit & 48h Photo/Weight Rules"]
+        ELIG --> TKT["Deduplicated Ticket Upsert (Match Open order_id + customer_email)"]
+        TKT --> AGENT
+    end
+
+    subgraph ReplyAgent["4. Read-Only Tool-Calling Agent & Entity Guardrail"]
+        AGENT["AI Reply Agent (kesar_copilot/agent_tools.py)"] <--> T1[("Tool: lookup_order (Read-Only, PII Stripped)")]
+        AGENT <--> T2[("Tool: search_faq (Read-Only, data/faq.md)")]
+        AGENT --> SAFE{"_safe_draft() Entity Verification (URLs, KC-####, Dates, INR, SKUs)"}
+        SAFE -- "Pass" --> DRAFT["Accept Multilingual Draft (en / hi / hinglish)"]
+        SAFE -- "Fail or Disabled" --> FALLBACK["Deterministic Grounded Fallback Draft"]
+    end
+
+    subgraph Persistence["5. Persistence, Telemetry & Human-in-the-Loop"]
+        MED_ESC --> SINK
+        LOW_CONF --> SINK
+        LOG_ONLY --> SINK
+        UNCOV --> SINK
+        PRIV_BLK --> SINK
+        DRAFT --> SINK
+        FALLBACK --> SINK
+        SINK[("Primary Store: SQLite / CSV (Audit + Tickets + Token/Cost Telemetry)")] --> SHEETS[("Optional Sync: Google Sheets (Audit Log & Tickets Tabs)")]
+        SHEETS --> HITL["Human Specialist Review (No Auto-Send / No Auto-Refund)"]
+    end
+```
+
+### n8n Workflow Canvas
+
 ![workflow](./screenshots/workflow.png)
 
 ### Output Previews (`Tickets` & `Audit Log`)
