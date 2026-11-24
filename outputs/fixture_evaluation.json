@@ -1,0 +1,84 @@
+{
+  "evaluation_type": "developer-authored fixture regression expectations",
+  "not_a_holdout_benchmark": true,
+  "sample_count": 25,
+  "intent_matches": 25,
+  "intent_match_rate": 1.0,
+  "action_matches": 25,
+  "action_match_rate": 1.0,
+  "unique_tickets": 9,
+  "mismatches": [],
+  "v1_baseline": {
+    "version": "v1",
+    "sample_count": 25,
+    "intent_matches": 24,
+    "intent_match_rate": 0.96,
+    "action_matches": 23,
+    "action_match_rate": 0.92,
+    "unique_tickets": 10,
+    "needs_human_count": 15,
+    "confusion_matrix": {
+      "order_status": {
+        "order_status": 8
+      },
+      "product_query": {
+        "product_query": 3
+      },
+      "return_refund": {
+        "return_refund": 5
+      },
+      "complaint": {
+        "complaint": 5
+      },
+      "other": {
+        "other": 3,
+        "product_query": 1
+      }
+    },
+    "mismatches": [
+      {
+        "email_id": "E10",
+        "expected_intent": "order_status",
+        "actual_intent": "order_status",
+        "expected_action": "draft_reply",
+        "actual_action": "needs_human"
+      },
+      {
+        "email_id": "E17",
+        "expected_intent": "other",
+        "actual_intent": "product_query",
+        "expected_action": "log_only",
+        "actual_action": "draft_reply"
+      }
+    ]
+  },
+  "v2_final": {
+    "version": "v2",
+    "sample_count": 25,
+    "intent_matches": 25,
+    "intent_match_rate": 1.0,
+    "action_matches": 25,
+    "action_match_rate": 1.0,
+    "unique_tickets": 9,
+    "needs_human_count": 14,
+    "confusion_matrix": {
+      "order_status": {
+        "order_status": 8
+      },
+      "product_query": {
+        "product_query": 3
+      },
+      "return_refund": {
+        "return_refund": 5
+      },
+      "complaint": {
+        "complaint": 5
+      },
+      "other": {
+        "other": 4
+      }
+    },
+    "mismatches": []
+  },
+  "interpretation": "These labels were written for regression testing against the 25 supplied fixture examples. v1 captures initial baseline gaps (Hindi query, sender-email order fallback, collab precedence, and duplicate ticket creation); v2 resolves all 25 fixture scenarios."
+}

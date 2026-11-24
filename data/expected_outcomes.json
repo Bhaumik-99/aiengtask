@@ -1,0 +1,31 @@
+{
+  "evaluation_type": "developer-authored fixture regression expectations",
+  "not_a_holdout_benchmark": true,
+  "items": [
+    {"email_id": "E01", "intent": "order_status", "action": "draft_reply"},
+    {"email_id": "E02", "intent": "product_query", "action": "draft_reply"},
+    {"email_id": "E03", "intent": "return_refund", "action": "ticket_created"},
+    {"email_id": "E04", "intent": "complaint", "action": "ticket_created"},
+    {"email_id": "E05", "intent": "order_status", "action": "draft_reply"},
+    {"email_id": "E06", "intent": "other", "action": "log_only"},
+    {"email_id": "E07", "intent": "order_status", "action": "needs_human"},
+    {"email_id": "E08", "intent": "complaint", "action": "ticket_created"},
+    {"email_id": "E09", "intent": "product_query", "action": "draft_reply"},
+    {"email_id": "E10", "intent": "order_status", "action": "draft_reply"},
+    {"email_id": "E11", "intent": "return_refund", "action": "ticket_created"},
+    {"email_id": "E12", "intent": "return_refund", "action": "ticket_created"},
+    {"email_id": "E13", "intent": "other", "action": "log_only"},
+    {"email_id": "E14", "intent": "complaint", "action": "ticket_created"},
+    {"email_id": "E15", "intent": "order_status", "action": "draft_reply"},
+    {"email_id": "E16", "intent": "return_refund", "action": "ticket_created"},
+    {"email_id": "E17", "intent": "other", "action": "log_only"},
+    {"email_id": "E18", "intent": "order_status", "action": "needs_human"},
+    {"email_id": "E19", "intent": "return_refund", "action": "ticket_created"},
+    {"email_id": "E20", "intent": "product_query", "action": "needs_human"},
+    {"email_id": "E21", "intent": "complaint", "action": "ticket_created"},
+    {"email_id": "E22", "intent": "order_status", "action": "needs_human"},
+    {"email_id": "E23", "intent": "complaint", "action": "ticket_created"},
+    {"email_id": "E24", "intent": "order_status", "action": "draft_reply"},
+    {"email_id": "E25", "intent": "other", "action": "log_only"}
+  ]
+}
