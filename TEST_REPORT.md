@@ -4,6 +4,7 @@
 **Platform used:** Hybrid — Importable **n8n** workflow ([`workflow/kesar_order_support_copilot_n8n.json`](workflow/kesar_order_support_copilot_n8n.json)) + **Python 3.10+ live execution engine & webhook** ([`kesar_copilot/`](kesar_copilot/))
 **LLM(s) used:** **Groq — `openai/gpt-oss-120b`** (`temperature=0`, JSON mode + function-calling tools `lookup_order` and `search_faq`, executed live across all 25 test emails on Groq's ₹0 free tier)
 **Google Sheet (Live Synced):** [https://docs.google.com/spreadsheets/d/1wqh8cZgmH7_l05VlMvPrb6VfaVGLDPCQRnuEc9zUC-o/edit?usp=sharing](https://docs.google.com/spreadsheets/d/1wqh8cZgmH7_l05VlMvPrb6VfaVGLDPCQRnuEc9zUC-o/edit?usp=sharing) (`Audit Log`: 25 rows, `Tickets`: 9 deduplicated rows)
+**Walkthrough Video:** [https://github.com/Bhaumik-99/aiengtask/blob/main/screenshots/walkthrough.mp4](https://github.com/Bhaumik-99/aiengtask/blob/main/screenshots/walkthrough.mp4) ([`screenshots/walkthrough.mp4`](screenshots/walkthrough.mp4))
 
 ---
 
