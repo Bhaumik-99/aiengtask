@@ -17,8 +17,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay fixture emails to a webhook (dry-run by default)")
     parser.add_argument("--url", required=True, help="Webhook URL")
     parser.add_argument("--file", default=str(DEFAULT_FIXTURE))
-    parser.add_argument("--only", default="", help="Comma-separated email IDs, e.g. E01,E04")
+    parser.add_argument("--only", default="", help="Comma-separated email IDs in replay order, e.g. E01,E07,E03,E04,E21")
     parser.add_argument("--delay", type=float, default=0.0, help="Delay between requests in seconds")
+    parser.add_argument("--timeout", type=float, default=120.0, help="Per-request HTTP timeout in seconds (default: 120s for live LLM + rate-limit backoff)")
     parser.add_argument("--send", action="store_true", help="Actually send requests; otherwise only preview")
     parser.add_argument("--allow-external", action="store_true", help="Permit sending fixture PII to a non-local host")
     parser.add_argument("--header", action="append", default=[], help="HTTP header as Name:Value; repeatable")
@@ -26,6 +27,8 @@ def main() -> None:
 
     if args.delay < 0:
         parser.error("--delay must be zero or greater")
+    if args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
     parsed = urllib.parse.urlparse(args.url)
     if parsed.scheme != "http" and parsed.scheme != "https":
         parser.error("--url must use http or https")
@@ -34,10 +37,13 @@ def main() -> None:
         parser.error("Refusing to send fixture customer data to a non-local host without --allow-external")
 
     fixture = json.loads(Path(args.file).read_text(encoding="utf-8"))
-    emails = fixture.get("emails", [])
+    all_emails = fixture.get("emails", [])
+    by_id = {email.get("id"): email for email in all_emails}
     if args.only:
-        wanted = {part.strip() for part in args.only.split(",") if part.strip()}
-        emails = [email for email in emails if email.get("id") in wanted]
+        wanted_order = [part.strip() for part in args.only.split(",") if part.strip()]
+        emails = [by_id[eid] for eid in wanted_order if eid in by_id]
+    else:
+        emails = all_emails
     if not emails:
         parser.error("No fixture emails selected")
 
@@ -48,10 +54,11 @@ def main() -> None:
         name, value = raw_header.split(":", 1)
         headers[name.strip()] = value.strip()
 
-    for email in emails:
+    for index, email in enumerate(emails):
         if not args.send:
             print(f"DRY-RUN {email.get('id')} -> {args.url}")
             continue
+        t0 = time.monotonic()
         request = urllib.request.Request(
             args.url,
             data=json.dumps(email, ensure_ascii=False).encode("utf-8"),
@@ -59,12 +66,16 @@ def main() -> None:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
+            with urllib.request.urlopen(request, timeout=args.timeout) as response:
                 body = response.read().decode("utf-8", errors="replace")
-                print(email.get("id"), response.status, body[:160])
+                elapsed = time.monotonic() - t0
+                print(f"{email.get('id')} {response.status} ({elapsed:.1f}s) {body[:220]}")
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", errors="replace")[:200]
+            print(f"{email.get('id')} HTTP_{exc.code} {err_body}")
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            print(email.get("id"), "ERROR", type(exc).__name__)
-        if args.delay:
+            print(f"{email.get('id')} ERROR {type(exc).__name__}: {exc}")
+        if args.delay and index + 1 < len(emails):
             time.sleep(args.delay)
 
 

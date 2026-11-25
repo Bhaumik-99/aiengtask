@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -33,9 +34,10 @@ def resolve_db_path(raw_path: str | None = None) -> Path:
 def init_db(db_path: Path | None = None) -> None:
     path = db_path or resolve_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=10)
+    db = sqlite3.connect(path, timeout=15)
     try:
-        db.execute("PRAGMA busy_timeout = 10000")
+        db.execute("PRAGMA journal_mode = WAL")
+        db.execute("PRAGMA busy_timeout = 15000")
         db.execute("CREATE TABLE IF NOT EXISTS audit (email_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
         db.execute("CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY, order_id TEXT, payload TEXT NOT NULL)")
         db.commit()
@@ -54,24 +56,30 @@ def _read_state(db: sqlite3.Connection) -> dict[str, list[dict[str, Any]]]:
 
 def create_handler(db_path: Path):
     """Create an isolated handler class for the given SQLite database path."""
+    # Serialize full request processing per server instance so concurrent callers
+    # wait cleanly in Python without holding SQLite's file lock across slow LLM I/O.
+    process_lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "KesarCopilot/0.3"
+        server_version = "KesarCopilot/0.4"
 
         def _respond(self, status: int, payload: dict[str, Any]) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                LOGGER.warning("Client disconnected before HTTP %s response could be written", status)
 
         def do_GET(self) -> None:  # noqa: N802 - stdlib handler method name
             if self.path != "/health":
                 return self._respond(404, {"error": "not_found"})
             try:
-                db = sqlite3.connect(db_path, timeout=3)
+                db = sqlite3.connect(db_path, timeout=5)
                 try:
                     db.execute("SELECT 1").fetchone()
                 finally:
@@ -112,35 +120,51 @@ def create_handler(db_path: Path):
                 return self._respond(400, {"error": str(exc)})
 
             try:
-                db = sqlite3.connect(db_path, timeout=10)
-                try:
-                    db.execute("PRAGMA busy_timeout = 10000")
-                    db.execute("BEGIN IMMEDIATE")
-                    state = _read_state(db)
+                with process_lock:
+                    # 1. Fast read snapshot without holding a write transaction during LLM calls.
+                    db = sqlite3.connect(db_path, timeout=15)
+                    try:
+                        db.execute("PRAGMA busy_timeout = 15000")
+                        state = _read_state(db)
+                    finally:
+                        db.close()
+
                     was_duplicate = any(row.get("email_id") == email["id"] for row in state["audit"])
                     result = process(email, state, version="v2")
-                    db.execute(
-                        "INSERT OR IGNORE INTO audit(email_id, payload) VALUES(?, ?)",
-                        (result["email_id"], json.dumps(result, ensure_ascii=False)),
-                    )
-                    for ticket in state["tickets"]:
-                        db.execute(
-                            "INSERT INTO tickets(ticket_id, order_id, payload) VALUES(?, ?, ?) "
-                            "ON CONFLICT(ticket_id) DO UPDATE SET order_id=excluded.order_id, payload=excluded.payload",
-                            (ticket["ticket_id"], ticket.get("order_id", ""), json.dumps(ticket, ensure_ascii=False)),
-                        )
-                    db.commit()
-                finally:
-                    db.close()
-                sheets_sync: dict[str, Any] = {"status": "not_configured"}
-                if os.getenv("GOOGLE_SHEET_ID") and os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"):
+
+                    # 2. Sub-millisecond atomic SQLite commit after external LLM calls finish.
+                    db = sqlite3.connect(db_path, timeout=15)
                     try:
-                        from kesar_copilot.google_sheets import sync_state_to_sheets
-                        sheets_sync = {"status": "ok", "result": sync_state_to_sheets(state)}
-                    except Exception:
-                        # Local SQLite commit has succeeded; report the separate sink failure.
-                        LOGGER.exception("Google Sheets sync failed after local persistence")
-                        sheets_sync = {"status": "failed", "retry_required": True}
+                        db.execute("PRAGMA busy_timeout = 15000")
+                        db.execute("BEGIN IMMEDIATE")
+                        db.execute(
+                            "INSERT OR IGNORE INTO audit(email_id, payload) VALUES(?, ?)",
+                            (result["email_id"], json.dumps(result, ensure_ascii=False)),
+                        )
+                        for ticket in state["tickets"]:
+                            db.execute(
+                                "INSERT INTO tickets(ticket_id, order_id, payload) VALUES(?, ?, ?) "
+                                "ON CONFLICT(ticket_id) DO UPDATE SET order_id=excluded.order_id, payload=excluded.payload",
+                                (ticket["ticket_id"], ticket.get("order_id", ""), json.dumps(ticket, ensure_ascii=False)),
+                            )
+                        db.commit()
+                    finally:
+                        db.close()
+
+                    sheets_sync: dict[str, Any] = {"status": "not_configured"}
+                    if os.getenv("GOOGLE_SHEET_ID") and os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE"):
+                        try:
+                            from kesar_copilot.google_sheets import sync_state_to_sheets
+                            # Only sync the newly processed audit row + open tickets for speed
+                            incremental_state = {
+                                "audit": [result],
+                                "tickets": state["tickets"],
+                            }
+                            sheets_sync = {"status": "ok", "result": sync_state_to_sheets(incremental_state)}
+                        except Exception:
+                            LOGGER.exception("Google Sheets sync failed after local persistence")
+                            sheets_sync = {"status": "failed", "retry_required": True}
+
                 return self._respond(200, {
                     "email_id": result["email_id"],
                     "action": result["action_taken"],
@@ -152,12 +176,11 @@ def create_handler(db_path: Path):
             except (sqlite3.Error, OSError):
                 LOGGER.exception("Webhook persistence failure")
                 return self._respond(503, {"error": "temporarily_unavailable"})
-            except Exception:  # Keep internal exception details out of the response.
+            except Exception:
                 LOGGER.exception("Webhook processing failure")
                 return self._respond(500, {"error": "processing_failed"})
 
         def log_message(self, fmt: str, *args: Any) -> None:
-            # Avoid writing customer email addresses or bodies into the default access log.
             LOGGER.info("HTTP request handled")
 
     return Handler

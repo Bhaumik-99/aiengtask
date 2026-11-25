@@ -29,6 +29,8 @@ class WebhookIntegrationTests(unittest.TestCase):
             "WEBHOOK_SECRET": "s" * 40,
             "ENABLE_AGENT_TOOLS": "false",
             "ENABLE_LLM_CLASSIFICATION": "false",
+            "GOOGLE_SHEET_ID": "",
+            "GOOGLE_SERVICE_ACCOUNT_FILE": "",
         }, clear=False)
         self.env.start()
 

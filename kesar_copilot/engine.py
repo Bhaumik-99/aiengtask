@@ -757,7 +757,7 @@ def llm_classify(email: dict[str, Any], version: str = "v2") -> dict[str, Any] |
 
     _LAST_CLASSIFY_META["called"] = True
     url = base + "/chat/completions"
-    model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    model = os.getenv("LLM_CLASSIFY_MODEL") or os.getenv("LLM_MODEL", "gpt-4o-mini")
 
     # Attempt 1: structured JSON request
     payload: dict[str, Any] = {

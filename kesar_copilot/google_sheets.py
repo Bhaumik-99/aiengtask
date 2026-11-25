@@ -49,6 +49,10 @@ def _upsert(worksheet: Any, records: list[dict[str, Any]], columns: list[str], k
 
     inserted = 0
     updated = 0
+    batch_updates: list[dict[str, Any]] = []
+    rows_to_append: list[list[Any]] = []
+    end_letter = _column_letter(len(headers))
+
     for record in records:
         identifier = str(record.get(key) or "")
         if not identifier:
@@ -59,18 +63,29 @@ def _upsert(worksheet: Any, records: list[dict[str, Any]], columns: list[str], k
                 record.get(column, old_row[index] if index < len(old_row) else "")
                 for index, column in enumerate(headers)
             ]
-            start_col = 1
-            end_col = len(headers)
-            start_letter = _column_letter(start_col)
-            end_letter = _column_letter(end_col)
-            worksheet.update([values], f"{start_letter}{row_number}:{end_letter}{row_number}")
+            batch_updates.append({"range": f"A{row_number}:{end_letter}{row_number}", "values": [values]})
+            row_index_by_key[identifier] = (row_number, values)
             updated += 1
         else:
             values = _row_from_record(record, headers)
-            worksheet.append_row(values, value_input_option="USER_ENTERED")
+            rows_to_append.append(values)
             inserted += 1
-            # Keep in-memory lookup up to date if a duplicate exists in one batch.
             row_index_by_key[identifier] = (len(existing) + inserted, values)
+
+    if batch_updates:
+        if hasattr(worksheet, "batch_update"):
+            worksheet.batch_update(batch_updates, value_input_option="USER_ENTERED")
+        else:
+            for item in batch_updates:
+                worksheet.update(item["values"], item["range"])
+
+    if rows_to_append:
+        if hasattr(worksheet, "append_rows"):
+            worksheet.append_rows(rows_to_append, value_input_option="USER_ENTERED")
+        else:
+            for row_vals in rows_to_append:
+                worksheet.append_row(row_vals, value_input_option="USER_ENTERED")
+
     return {"inserted": inserted, "updated": updated}
 
 
@@ -94,8 +109,8 @@ def sync_state_to_sheets(
     `client` is injectable for tests. No Google network call happens unless the
     caller invokes this function with credentials or an explicit test client.
     """
-    sheet_id = spreadsheet_id or os.getenv("GOOGLE_SHEET_ID", "").strip()
-    credential_file = service_account_file or os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "").strip()
+    sheet_id = (os.getenv("GOOGLE_SHEET_ID", "") if spreadsheet_id is None else spreadsheet_id).strip()
+    credential_file = (os.getenv("GOOGLE_SERVICE_ACCOUNT_FILE", "") if service_account_file is None else service_account_file).strip()
     if client is None:
         if not sheet_id or not credential_file:
             raise SheetsConfigurationError(
