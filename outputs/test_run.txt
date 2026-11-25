@@ -74,6 +74,6 @@ test_required_screenshots_exist_and_are_valid_png_files (test_workflow_and_deliv
 test_test_report_contains_all_25_email_rows (test_workflow_and_deliverables.WorkflowAndDeliverableTests.test_test_report_contains_all_25_email_rows) ... ok
 
 ----------------------------------------------------------------------
-Ran 74 tests in 5.560s
+Ran 74 tests in 117.218s
 
 OK

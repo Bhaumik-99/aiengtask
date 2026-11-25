@@ -116,6 +116,13 @@ def execute_tool(name: str, arguments: dict[str, Any], sender_email: str) -> dic
     return {"status": "tool_not_allowed"}
 
 
+def _normalize_unicode_punctuation(text: str) -> str:
+    """Normalize typographic hyphens and non-breaking spaces emitted by modern LLMs."""
+    cleaned = re.sub(r"[\u2010\u2011\u2012\u2013\u2212]", "-", text)
+    cleaned = re.sub(r"[\u00a0\u202f\u2009\u2007]", " ", cleaned)
+    return cleaned
+
+
 def _normalize_digits(raw: str) -> str:
     return re.sub(r"[^\d]", "", raw)
 
@@ -135,22 +142,23 @@ def _safe_draft(
     tool_results: list[dict[str, Any]],
     required_tool: str | None,
     email_text: str = "",
+    policy_decision: str = "not_applicable",
 ) -> bool:
     """Validate that an agent draft obeys hard business rules and invents no entities.
 
     Unlike overly rigid word-level whitelists, this validator allows natural English,
     Hindi, and Hinglish phrasing (including negations like 'non-greasy' or 'not vegan')
-    while deterministically blocking unauthorized commitments, medical claims,
-    phishing prompts, and fabricated URLs, order IDs, ISO dates, or ₹ amounts.
+    while deterministically blocking unauthorized commitments, policy contradictions,
+    medical claims, phishing prompts, and fabricated URLs, order IDs, ISO dates, or ₹ amounts.
     """
     if not isinstance(text, str):
         return False
-    cleaned = text.strip()
+    cleaned = _normalize_unicode_punctuation(text).strip()
     if not (20 <= len(cleaned) <= 1500):
         return False
     lower = cleaned.casefold()
 
-    # 1. Block unauthorized refund/replacement approvals, medical cures, and credential requests.
+    # 1. Block unauthorized refund/replacement approvals, medical cures, and credential solicitation.
     forbidden = (
         "refund approved",
         "refund has been approved",
@@ -166,14 +174,29 @@ def _safe_draft(
         "cures psoriasis",
         "treat your condition",
         "diagnose",
-        "share your otp",
-        "send your otp",
-        "card pin",
-        "share your cvv",
-        "your password",
     )
     if any(term in lower for term in forbidden):
         return False
+    if re.search(r"\b(?:please\s+)?(?:share|send|provide|enter|reply\s+with)\s+(?:your\s+)?(?:otp|card\s+pin|pin|cvv|password)\b", lower):
+        return False
+
+    # 1b. Block drafts that contradict the authoritative deterministic policy_decision
+    # (e.g., if the LLM used its own system clock instead of email.received_at).
+    if policy_decision == "eligible_for_review":
+        contradictions = (
+            "window has passed",
+            "window has now passed",
+            "outside the 7-day",
+            "beyond the 7-day",
+            "unable to process a return",
+            "cannot accept a return",
+            "not eligible for a return",
+        )
+        if any(phrase in lower for phrase in contradictions):
+            return False
+    elif policy_decision in {"outside_policy_opened_item", "outside_policy_window"}:
+        if "meets the initial 7-day" in lower or "meets our 7-day" in lower:
+            return False
 
     # 2. Enforce required tool execution & valid evidence status.
     results = [r for r in tool_results if r.get("status") in {"verified", "found"}]
@@ -187,7 +210,7 @@ def _safe_draft(
     allowed_urls = {r.get("tracking_url") for r in results if r.get("tracking_url")}
     allowed_urls.add("https://kesarandco.example")
     for url in re.findall(r"https?://\S+", cleaned):
-        if url.rstrip(".,);]") not in allowed_urls:
+        if url.rstrip(".,);]*>\"'") not in allowed_urls:
             return False
 
     # 4. Verify every KC-#### order ID against verified tool output.
@@ -223,6 +246,7 @@ def run_support_agent(
     intent: str,
     task_context: str,
     required_tool: str,
+    policy_decision: str = "not_applicable",
 ) -> dict[str, Any]:
     """Run a bounded tool-calling reply agent and return a validated, grounded draft."""
     enabled = os.getenv("ENABLE_AGENT_TOOLS", "false").casefold() in {"1", "true", "yes"}
@@ -237,9 +261,12 @@ def run_support_agent(
     sender_email = email.get("from", {}).get("email", "").strip().casefold()
     email_text = f"{email.get('subject', '')}\n{email.get('body', '')}"
     user_payload = {
+        "scenario_today": "2026-11-20",
         "intent": intent,
+        "policy_decision": policy_decision,
         "task_context": task_context,
         "email": {
+            "received_at": email.get("received_at", ""),
             "subject": email.get("subject", ""),
             "body": email.get("body", ""),
             "attachment_count": len(email.get("attachments", [])),
@@ -310,7 +337,14 @@ def run_support_agent(
                     "retries": total_retries,
                     "usage": usage_summary,
                 }
-            if not _safe_draft(draft_body, tool_results, required_tool, email_text=email_text):
+            normalized_draft = _normalize_unicode_punctuation(draft_body).strip()
+            if not _safe_draft(
+                normalized_draft,
+                tool_results,
+                required_tool,
+                email_text=email_text,
+                policy_decision=policy_decision,
+            ):
                 return {
                     "status": "draft_rejected",
                     "tool_calls": call_trace,
@@ -321,13 +355,17 @@ def run_support_agent(
             return {
                 "status": "completed",
                 "tool_calls": call_trace,
-                "draft_body": draft_body.strip(),
+                "draft_body": normalized_draft,
                 "tool_results": tool_results,
                 "retries": total_retries,
                 "usage": usage_summary,
             }
 
-        messages.append(message)
+        messages.append({
+            "role": "assistant",
+            "content": message.get("content") or "",
+            "tool_calls": calls,
+        })
         for call in calls:
             if len(call_trace) >= 8:
                 return {

@@ -41,6 +41,17 @@ class CopilotTests(unittest.TestCase):
         cls.emails = load("data/test_emails.json")["emails"]
         cls.by_id = {email["id"]: email for email in cls.emails}
 
+    def setUp(self):
+        # Isolate fast deterministic unit tests from any local .env live flags;
+        # individual LLM tests explicitly enable flags via patch.dict(os.environ, ...).
+        self._env_patch = patch.dict(
+            os.environ,
+            {"ENABLE_LLM_CLASSIFICATION": "false", "ENABLE_AGENT_TOOLS": "false"},
+            clear=False,
+        )
+        self._env_patch.start()
+        self.addCleanup(self._env_patch.stop)
+
     def test_all_25_fixture_emails_process(self):
         state = batch("v2", self.emails)
         self.assertEqual(len(state["audit"]), 25)

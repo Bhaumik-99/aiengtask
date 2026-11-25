@@ -17,6 +17,12 @@
     "action_match_rate": 0.92,
     "unique_tickets": 10,
     "needs_human_count": 15,
+    "llm_classified_count": 0,
+    "valid_json_first_try": 0,
+    "agent_drafts_used": 0,
+    "total_tokens": 0,
+    "avg_tokens_per_email": 0.0,
+    "total_estimated_cost_usd": 0.0,
     "confusion_matrix": {
       "order_status": {
         "order_status": 8
@@ -61,6 +67,12 @@
     "action_match_rate": 1.0,
     "unique_tickets": 9,
     "needs_human_count": 14,
+    "llm_classified_count": 24,
+    "valid_json_first_try": 24,
+    "agent_drafts_used": 17,
+    "total_tokens": 110062,
+    "avg_tokens_per_email": 4402.5,
+    "total_estimated_cost_usd": 0.024025,
     "confusion_matrix": {
       "order_status": {
         "order_status": 8
@@ -80,5 +92,5 @@
     },
     "mismatches": []
   },
-  "interpretation": "These labels were written for regression testing against the 25 supplied fixture examples. v1 captures initial baseline gaps (Hindi query, sender-email order fallback, collab precedence, and duplicate ticket creation); v2 resolves all 25 fixture scenarios."
+  "interpretation": "These labels were written for regression testing against the 25 supplied fixture examples. v2 was executed live against Groq (openai/gpt-oss-120b) with tool-calling enabled."
 }

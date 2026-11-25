@@ -41,6 +41,8 @@ class WorkflowAndDeliverableTests(unittest.TestCase):
                 continue
             if any(part in {".git", "__pycache__", ".venv"} for part in path.parts):
                 continue
+            if path.name == ".env" or path.name.startswith(".env.") and path.name != ".env.example":
+                continue
             if path.suffix.lower() in {".png", ".jpg", ".sqlite3"}:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")

@@ -103,19 +103,44 @@ def _extract_usage(response_json: dict[str, Any]) -> tuple[int, int, int]:
     return prompt_t, completion_t, total_t
 
 
+def _parse_reset_seconds(headers: Any) -> float | None:
+    """Extract wait duration in seconds from Retry-After or x-ratelimit-reset-* headers."""
+    if headers is None:
+        return None
+    retry_after = headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass
+    for header_name in ("x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        raw = headers.get(header_name)
+        if not raw:
+            continue
+        mins = re.search(r"(\d+(?:\.\d+)?)m", raw)
+        secs = re.search(r"(\d+(?:\.\d+)?)s", raw)
+        ms = re.search(r"(\d+(?:\.\d+)?)ms", raw)
+        if ms and not secs:
+            return float(ms.group(1)) / 1000.0
+        total = (float(mins.group(1)) * 60.0 if mins else 0.0) + (float(secs.group(1)) if secs else 0.0)
+        if total > 0:
+            return min(total + 0.35, 30.0)
+    return None
+
+
 def post_chat_with_backoff(
     url: str,
     payload: dict[str, Any],
     api_key: str,
     urlopen_fn: Any = None,
-    timeout: int = 20,
+    timeout: int = 30,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """POST to an OpenAI-compatible chat endpoint with exponential backoff + jitter."""
+    """POST to an OpenAI-compatible chat endpoint with exponential backoff + Retry-After support."""
     opener = urlopen_fn or urllib.request.urlopen
     try:
-        max_retries = max(0, int(os.getenv("LLM_MAX_RETRIES", "3")))
+        max_retries = max(0, int(os.getenv("LLM_MAX_RETRIES", "5")))
     except ValueError:
-        max_retries = 3
+        max_retries = 5
     try:
         base_delay = max(0.0, float(os.getenv("LLM_RETRY_BASE_SECONDS", "0.25")))
     except ValueError:
@@ -133,7 +158,11 @@ def post_chat_with_backoff(
         request = urllib.request.Request(
             url,
             data=encoded,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "KesarCopilot/1.0",
+            },
             method="POST",
         )
         try:
@@ -145,10 +174,18 @@ def post_chat_with_backoff(
             meta["total_tokens"] += t_tok
             return data, meta
         except urllib.error.HTTPError as exc:
-            meta["error"] = f"http_{exc.code}"
+            err_detail = ""
+            try:
+                if exc.fp is not None:
+                    err_detail = exc.fp.read().decode("utf-8", errors="ignore")[:240]
+            except Exception:
+                err_detail = ""
+            meta["error"] = f"http_{exc.code}" + (f":{err_detail}" if err_detail and exc.code not in RETRYABLE_HTTP_CODES else "")
             if exc.code in RETRYABLE_HTTP_CODES and attempt < max_retries:
                 meta["retries"] += 1
-                delay = base_delay * (2 ** attempt) + random.uniform(0.0, base_delay * 0.25)
+                header_wait = _parse_reset_seconds(getattr(exc, "headers", None)) if base_delay > 0 else 0.0
+                exp_wait = base_delay * (2 ** attempt) + random.uniform(0.0, base_delay * 0.25)
+                delay = max(exp_wait, header_wait or 0.0)
                 if delay > 0:
                     time.sleep(delay)
                 continue
@@ -833,10 +870,18 @@ def choose_classification(email: dict[str, Any], version: str = "v2") -> tuple[d
 def draft(email: dict[str, Any], text: str) -> str:
     name = email.get("from", {}).get("name") or "there"
     first_name = re.sub(r"[\r\n\t]+", " ", name).strip().split(" ")[0][:40] or "there"
+    cleaned = re.sub(
+        r"^(?:(?:hi|hello|dear)\s+[^,\n]{1,40},\s*|नमस्ते(?:\s+[^,\n]{1,40})?,\s*)",
+        "",
+        text.strip(),
+        flags=re.I,
+    ).strip()
+    if cleaned:
+        cleaned = cleaned[0].upper() + cleaned[1:] if cleaned[0].isascii() else cleaned
     body = email.get("body", "")
     if re.search(r"[\u0900-\u097f]", body):
-        return f"नमस्ते {first_name},\n\n{text}\n\nसादर,\nटीम केसर"
-    return f"Hi {first_name},\n\n{text}\n\nWarm regards,\nTeam Kesar"
+        return f"नमस्ते {first_name},\n\n{cleaned}\n\nसादर,\nटीम केसर"
+    return f"Hi {first_name},\n\n{cleaned}\n\nWarm regards,\nTeam Kesar"
 
 
 def age_days(email: dict[str, Any], order: dict[str, Any]) -> int | None:
@@ -1294,7 +1339,7 @@ def process(email: dict[str, Any], store: dict[str, Any], version: str = "v2", a
             agent_context = {"status": "skipped_sensitive_content", "tool_calls": [], "draft_body": ""}
         elif required_tool:
             from kesar_copilot.agent_tools import run_support_agent
-            agent_context = run_support_agent(email, intent, task_context, required_tool)
+            agent_context = run_support_agent(email, intent, task_context, required_tool, policy_decision=decision)
         else:
             agent_context = {"status": "not_applicable", "tool_calls": [], "draft_body": ""}
 
@@ -1359,8 +1404,14 @@ def process(email: dict[str, Any], store: dict[str, Any], version: str = "v2", a
 
 def batch(version: str, emails: list[dict[str, Any]]) -> dict[str, Any]:
     state: dict[str, Any] = {"audit": [], "tickets": []}
-    for email in emails:
+    try:
+        inter_delay = max(0.0, float(os.getenv("LLM_INTER_EMAIL_DELAY_SECONDS", "0.0")))
+    except ValueError:
+        inter_delay = 0.0
+    for idx, email in enumerate(emails):
         process(email, state, version)
+        if inter_delay > 0 and idx + 1 < len(emails):
+            time.sleep(inter_delay)
     return state
 
 

@@ -1,21 +1,21 @@
-# Engineering Self-Review — Kesar & Co. Copilot (V4)
+# Engineering Self-Review — Kesar & Co. Copilot (V4 — Live Groq Verified)
 
-This self-review separates **code, safety, and workflow completeness** in the repository from **user-account steps** (live API credentials, shared Google Sheet link, and Loom recording) that only the candidate can attach before emailing the submission.
+This self-review summarizes the repository state after executing the full 25-email `v2` pipeline **live against Groq (`openai/gpt-oss-120b`)**.
 
 ## Current Readiness Summary
 
 | Dimension | Status | Notes |
 |---|---|---|
-| **Core workflow & policy accuracy** | Strong | `v2` resolves all 25 fixture scenarios (9 deduplicated tickets, 7 safe drafts, 4 non-ticket human escalations, 4 log-only rows) and generalizes across all 8 FAQ products and regional shipping tiers. |
-| **Privacy & adversarial safety** | Strong | Server-side sender ownership checks (`E07`), prompt-injection immunity (`E12`), medical escalation + LLM exclusion (`E20`), and honest attachment-filename handling (`E21`). |
-| **LLM classification, retries & repair** | Strong (mock-verified) | Loads versioned prompts from `prompts/`, enforces `schemas/llm_output.schema.json`, implements exponential backoff + jitter on `429`/`5xx`, runs 1-turn JSON auto-repair, and logs token/cost columns. |
-| **AI agent & tool grounding** | Strong (mock-verified) | Bounded tool-calling loop (`lookup_order` + `search_faq`) across reply branches with entity-level validation (URLs, `KC-####`, dates, ₹ amounts, catalog SKUs) supporting English, Hindi, and Hinglish. |
-| **`v1` → `v2` iteration & test suite** | Strong | Genuine, measurable `v1` vs `v2` progression documented in `TEST_REPORT.md` (25-row template table) backed by 74 unit, webhook, Sheets, and workflow-blueprint tests. |
-| **Submission artefacts** | Ready for final user links | Includes importable `workflow/kesar_order_support_copilot_n8n.json` (zero secrets) and rendered previews in `screenshots/`. Candidate still needs to paste their own live Google Sheet view link and 5-minute Loom URL. |
+| **Core workflow & policy accuracy** | Strong (Live-Verified) | `v2` resolved all 25 fixture scenarios (`9` deduplicated tickets, `7` safe drafts, `4` non-ticket human escalations, `4` log-only rows) with `24/24` agreement between live `openai/gpt-oss-120b` and deterministic policy checks. |
+| **Privacy & adversarial safety** | Strong (Live-Verified) | Server-side sender ownership checks (`E07`), live prompt-injection defeat (`E12`), medical escalation + external LLM exclusion (`E20`), and honest attachment-filename handling (`E21`). |
+| **LLM classification, retries & repair** | Strong (Live-Verified) | `24/24` first-try valid JSON on `openai/gpt-oss-120b`, `63` free-tier `429` TPM rate-limit windows absorbed automatically via `x-ratelimit-reset-tokens` backoff (`0` failures), and `110,062` tokens (`$0.024025` list value) logged across `outputs/audit_log_v2.csv`. |
+| **AI agent & tool grounding** | Strong (Live-Verified) | `17/17` eligible reply branches called live `lookup_order` and/or `search_faq` tools and passed `_safe_draft()` entity + scenario-clock contradiction checks across English, Hindi (`E09`), and Hinglish (`E05`). |
+| **`v1` → `v2` iteration & test suite** | Strong | Empirical `v1` → `v2` progression (including catching live server-clock drift on `E03` and U+2011 hyphen normalization) documented in `TEST_REPORT.md` and backed by 74 automated tests. |
+| **Submission artefacts** | Ready for final user links | Includes importable `workflow/kesar_order_support_copilot_n8n.json` (zero secrets) and updated PNG previews in `screenshots/`. Candidate only needs to attach their shared Google Sheet URL and 5-minute Loom link. |
 
 ## Remaining Honest Limitations
 
-1. **No bundled live provider credentials:** Live LLM traces and live Google Sheets writes require user-supplied credentials (`.env` / `service-account.json` or n8n OAuth). Do not claim live benchmark accuracy without running against a fixed live model on an independent holdout dataset.
-2. **Fixture regression ≠ production accuracy:** `25/25` on `data/test_emails.json` tests regression against known scenarios, not blind generalization; `0.75` remains an uncalibrated pilot heuristic until calibrated on held-out production traffic.
-3. **Date-level 48-hour screen & filename-only attachments:** `orders.json` provides `YYYY-MM-DD` delivery dates (not timestamps) and `test_emails.json` provides attachment filenames (not image bytes), so damaged/wrong/missing cases (`E04`, `E08`, `E14`, `E21`, `E23`) always require human verification.
+1. **Fixture regression ≠ production accuracy:** `25/25` on `data/test_emails.json` verifies scenario coverage, not blind holdout accuracy; `0.75` remains an uncalibrated pilot heuristic until calibrated on held-out production traffic.
+2. **Date-level 48-hour screen & filename-only attachments:** `orders.json` provides `YYYY-MM-DD` delivery dates (not timestamps) and `test_emails.json` provides attachment filenames (not image bytes), so damaged/wrong/missing cases (`E04`, `E08`, `E14`, `E21`, `E23`) always require human verification.
+3. **Google Sheets live link:** `kesar_copilot/google_sheets.py` is mock-tested; upload `outputs/audit_log_v2.csv` & `outputs/tickets_v2.csv` (or run `--sync-sheets` with your service account) to create the viewable Google Sheet URL.
 4. **Upstream email sender authentication:** A production deployment must verify Gmail/Outlook OAuth metadata and SPF/DKIM/DMARC rather than trusting raw `from.email` strings on an HTTP webhook.

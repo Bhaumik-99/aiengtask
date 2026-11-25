@@ -1,11 +1,14 @@
-"""Evaluate both v1 (baseline) and v2 (final) against fixture regression expectations.
+"""Evaluate v1 (baseline) and v2 (final live or offline run) against fixture expectations.
 
-v2 must match 25/25 intents and 25/25 actions with 9 deduplicated tickets.
-v1 metrics are recorded alongside v2 to document the engineering iteration.
+By default, evaluates saved `outputs/results_v1.json` and `outputs/results_v2.json`
+when present so live LLM run telemetry is preserved without re-triggering API calls.
+Pass `--recompute-offline` to force a fresh deterministic offline evaluation.
 """
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -17,8 +20,28 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from kesar_copilot.engine import ROOT, batch, load
 
 
-def _evaluate_version(version: str, emails: list[dict[str, Any]], gold: dict[str, dict[str, str]]) -> dict[str, Any]:
-    state = batch(version, emails)
+def _load_or_compute(version: str, emails: list[dict[str, Any]], recompute_offline: bool) -> dict[str, Any]:
+    saved_path = ROOT / "outputs" / f"results_{version}.json"
+    if not recompute_offline and saved_path.is_file():
+        return json.loads(saved_path.read_text(encoding="utf-8"))
+    prev_cls = os.environ.get("ENABLE_LLM_CLASSIFICATION")
+    prev_agt = os.environ.get("ENABLE_AGENT_TOOLS")
+    try:
+        os.environ["ENABLE_LLM_CLASSIFICATION"] = "false"
+        os.environ["ENABLE_AGENT_TOOLS"] = "false"
+        return batch(version, emails)
+    finally:
+        if prev_cls is None:
+            os.environ.pop("ENABLE_LLM_CLASSIFICATION", None)
+        else:
+            os.environ["ENABLE_LLM_CLASSIFICATION"] = prev_cls
+        if prev_agt is None:
+            os.environ.pop("ENABLE_AGENT_TOOLS", None)
+        else:
+            os.environ["ENABLE_AGENT_TOOLS"] = prev_agt
+
+
+def _evaluate_state(version: str, state: dict[str, Any], gold: dict[str, dict[str, str]]) -> dict[str, Any]:
     actual = {row["email_id"]: row for row in state["audit"]}
     if set(gold) != set(actual):
         raise SystemExit(f"Fixture/label IDs differ for {version}: expected={len(gold)} actual={len(actual)}")
@@ -46,7 +69,13 @@ def _evaluate_version(version: str, emails: list[dict[str, Any]], gold: dict[str
             })
 
     total = len(gold)
-    needs_human_count = sum(1 for row in state["audit"] if row.get("needs_human") == "true")
+    audit_rows = state["audit"]
+    needs_human_count = sum(1 for row in audit_rows if row.get("needs_human") == "true")
+    total_tokens = sum(int(row.get("total_tokens") or 0) for row in audit_rows)
+    total_cost_usd = round(sum(float(row.get("estimated_cost_usd") or 0.0) for row in audit_rows), 6)
+    agent_drafts_used = sum(1 for row in audit_rows if row.get("agent_draft_used") == "true")
+    valid_json_first_try = sum(1 for row in audit_rows if row.get("json_valid_first_try") == "true")
+    llm_classified_count = sum(1 for row in audit_rows if row.get("json_valid_first_try") in {"true", "false"})
     return {
         "version": version,
         "sample_count": total,
@@ -56,18 +85,30 @@ def _evaluate_version(version: str, emails: list[dict[str, Any]], gold: dict[str
         "action_match_rate": round(action_matches / total, 4) if total else 0,
         "unique_tickets": len(state["tickets"]),
         "needs_human_count": needs_human_count,
+        "llm_classified_count": llm_classified_count,
+        "valid_json_first_try": valid_json_first_try,
+        "agent_drafts_used": agent_drafts_used,
+        "total_tokens": total_tokens,
+        "avg_tokens_per_email": round(total_tokens / total, 1) if total else 0,
+        "total_estimated_cost_usd": total_cost_usd,
         "confusion_matrix": {key: dict(value) for key, value in confusion.items()},
         "mismatches": mismatches,
     }
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate v1 and v2 fixture outputs")
+    parser.add_argument("--recompute-offline", action="store_true", help="Ignore saved results_*.json and run offline")
+    args = parser.parse_args()
+
     emails = load("data/test_emails.json")["emails"]
     expected = load("data/expected_outcomes.json")["items"]
     gold = {row["email_id"]: row for row in expected}
 
-    v1_eval = _evaluate_version("v1", emails, gold)
-    v2_eval = _evaluate_version("v2", emails, gold)
+    v1_state = _load_or_compute("v1", emails, args.recompute_offline)
+    v2_state = _load_or_compute("v2", emails, args.recompute_offline)
+    v1_eval = _evaluate_state("v1", v1_state, gold)
+    v2_eval = _evaluate_state("v2", v2_state, gold)
 
     report = {
         "evaluation_type": "developer-authored fixture regression expectations",
@@ -83,8 +124,7 @@ def main() -> None:
         "v2_final": v2_eval,
         "interpretation": (
             "These labels were written for regression testing against the 25 supplied fixture examples. "
-            "v1 captures initial baseline gaps (Hindi query, sender-email order fallback, collab precedence, "
-            "and duplicate ticket creation); v2 resolves all 25 fixture scenarios."
+            "v2 was executed live against Groq (openai/gpt-oss-120b) with tool-calling enabled."
         ),
     }
     output_path = ROOT / "outputs" / "fixture_evaluation.json"
@@ -92,7 +132,13 @@ def main() -> None:
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({
         "v1": {k: v1_eval[k] for k in ("intent_matches", "action_matches", "unique_tickets")},
-        "v2": {k: v2_eval[k] for k in ("sample_count", "intent_matches", "intent_match_rate", "action_matches", "action_match_rate", "unique_tickets", "mismatches")},
+        "v2": {
+            k: v2_eval[k]
+            for k in (
+                "sample_count", "intent_matches", "action_matches", "unique_tickets",
+                "valid_json_first_try", "agent_drafts_used", "total_tokens", "total_estimated_cost_usd", "mismatches",
+            )
+        },
     }, indent=2))
     if v2_eval["mismatches"]:
         raise SystemExit(1)
