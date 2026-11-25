@@ -43,7 +43,7 @@ class WorkflowAndDeliverableTests(unittest.TestCase):
                 continue
             if path.name == ".env" or path.name.startswith(".env.") and path.name != ".env.example":
                 continue
-            if path.suffix.lower() in {".png", ".jpg", ".sqlite3"}:
+            if path.suffix.lower() in {".png", ".jpg", ".sqlite3", ".mp4"}:
                 continue
             text = path.read_text(encoding="utf-8", errors="ignore")
             self.assertIsNone(secret_pattern.search(text), f"Potential secret found in {path}")
