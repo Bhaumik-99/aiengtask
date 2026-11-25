@@ -35,13 +35,15 @@ class WorkflowAndDeliverableTests(unittest.TestCase):
         self.assertIn("n8n-nodes-base.googleSheets", node_types)
 
     def test_no_secrets_or_api_keys_committed_in_repo(self):
-        secret_pattern = re.compile(r"(sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{30,}|gsk_[A-Za-z0-9]{20,})")
+        secret_pattern = re.compile(r"(sk-[A-Za-z0-9]{20,}|AIza[0-9A-Za-z\-_]{30,}|gsk_[A-Za-z0-9]{20,}|-----BEGIN" + r" PRIVATE KEY-----)")
         for path in ROOT.rglob("*"):
             if not path.is_file():
                 continue
             if any(part in {".git", "__pycache__", ".venv"} for part in path.parts):
                 continue
-            if path.name == ".env" or path.name.startswith(".env.") and path.name != ".env.example":
+            if path.name == ".env" or (path.name.startswith(".env.") and path.name != ".env.example"):
+                continue
+            if path.name.startswith("service-account") or path.name.startswith("gen-lang-client"):
                 continue
             if path.suffix.lower() in {".png", ".jpg", ".sqlite3", ".mp4"}:
                 continue

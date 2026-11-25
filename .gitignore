@@ -7,3 +7,4 @@ __pycache__/
 
 *.sqlite3
 service-account*.json
+gen-lang-client*.json
